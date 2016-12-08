@@ -1,0 +1,162 @@
+   1              	# 1 "build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx"
+   1              	// coding: utf-8
+   1              	...
+   0              	
+   0              	
+   2              	// ----------------------------------------------------------------------------
+   3              	/* Copyright (c) 2013, Roboterclub Aachen e.V.
+   4              	 * All rights reserved.
+   5              	 *
+   6              	 * Redistribution and use in source and binary forms, with or without
+   7              	 * modification, are permitted provided that the following conditions are met:
+   8              	 *
+   9              	 *     * Redistributions of source code must retain the above copyright
+  10              	 *       notice, this list of conditions and the following disclaimer.
+  11              	 *     * Redistributions in binary form must reproduce the above copyright
+  12              	 *       notice, this list of conditions and the following disclaimer in the
+  13              	 *       documentation and/or other materials provided with the distribution.
+  14              	 *     * Neither the name of the Roboterclub Aachen e.V. nor the
+  15              	 *       names of its contributors may be used to endorse or promote products
+  16              	 *       derived from this software without specific prior written permission.
+  17              	 *
+  18              	 * THIS SOFTWARE IS PROVIDED BY ROBOTERCLUB AACHEN E.V. ''AS IS'' AND ANY
+  19              	 * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  20              	 * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  21              	 * DISCLAIMED. IN NO EVENT SHALL ROBOTERCLUB AACHEN E.V. BE LIABLE FOR ANY
+  22              	 * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  23              	 * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  24              	 * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  25              	 * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  26              	 * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+  27              	 * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  28              	 */
+  29              	// ----------------------------------------------------------------------------
+  30              	
+  31              		.text
+  32              		.syntax	unified
+  33              		.align	4
+  34              		.thumb
+  35              	
+  36              		// ------------------------------------------------------------------------
+  37              		/**
+  38              		 * @brief	Hard fault handler
+  39              		 *
+  40              		 * Prepares data for the C output handler
+  41              		 */
+  42              		.global	HardFault_Handler
+  44              		.thumb_func
+  45              		.func	HardFault_Handler
+  46              	HardFault_Handler:
+  47              	
+  48              		/* When a hard fault occurs, this handler will move the stack pointer around.
+  49              	 	 * This makes it harder to debug a hard fault with a real debugger, so if one is connected we wou
+  50              		 * like to trigger a software breakpoint before moving the stack pointer.
+  51              		 * The decision to trigger the breakpoint needs to happen at runtime and not at compile time,
+  52              		 * since when a hard fault has been triggered, you want to debug the binary on the device and not
+  53              		 * compile a new binary with the breakpoint in it, which might then prevent the fault from occurri
+  54              		 *
+  55              		 * The Cortex-M3 Core Debug module contains the "Debug Halting Control and Status Register" (DHCSR
+  56              		 * which contains the `C_DEBUGEN` bit, which is set by the debugger to enable halting debug.
+  57              		 * "If halting debug is enabled [...], captured events will halt the processor in Debug state."
+  58              		 * You can test if halting debug is enabled using `(CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_M
+  59              		 *
+  60              		 * !!!WARNING:
+  61              		 *    "If DHCSR.C_DEBUGEN is clear and a breakpoint occurs in an NMI or HardFault exception handle
+  62              		 *     the system locks up with an unrecoverable error."
+  63              		 *
+  64              		 * Since we are using a breakpoint inside the HardFault exception handler, we must therefore alway
+  65              		 * check this flag, before executing the breakpoint.
+  66              		 *
+  67              		 * !!!WARNING:
+  68              		 *     On ARMv6-M "access to the DHCSR from software running on the processor is IMPLEMENTATION DE
+  69              		 *     This means, that on Cortex-M0, it might not be possible to read the DHCSR from software!
+  70              		 *
+  71              		 * Neither STM32F0 nor LPC11 implement this access!
+  72              		 *
+  73              		 * !!!WARNING:
+  74              		 *     OpenOcd does not reset the `C_DEBUGEN` bit on the `shutdown` command. This might be a bug.
+  75              		 *     A workaround is to issue `reset halt`, then manually reset the bits using `mww 0xE000EDF0 0
+  76              		 *     This will also clear the `C_HALT` bit and therefore this is equivalent to `reset run`.
+  77              		 *
+  78              		 * !!!WARNING:
+  79              		 *    `C_DEBUGEN` is sticky! It survives all resets but a power-on reset. This means that after de
+  80              		 *    either power cycle the target or manually clear `C_DEBUGEN` using `mww 0xE000EDF0 0xA05F0000
+  81              		 */
+  82 0000 8646     		mov lr, r0							// save register 0 into the link register
+  83 0002 1148     		ldr r0, =0xE000EDF0					// Load the address of the Debug Halting Control and Status Register (DHCS
+  84 0004 0068     		ldr r0, [r0, #0]					// load the content of DHCSR, we need to check if bit 0 is set
+  85 0006 C007     		lsls r0, #31						// test bit 0 by shifting it left 31 times, becoming sign bit
+  86 0008 7046     		mov r0, lr							// restore register 0 before triggering the breakpoint
+  87 000a 02D5     		bpl no_debugger						// branch over breakpoint if lsls resulted in positive integer (MSB not set)
+  88              	
+  89 000c 6FF0060E 		ldr lr, =0xfffffff9					// restore link register for GDB
+  90 0010 2ABE     		bkpt #42							// trigger a break point, only if a debugger is connected
+  91              	
+  92              	no_debugger:
+  93              		// Save the current main stack pointer into the PSP register.
+  94 0012 8646     		mov lr, r0							// save register 0 into the link register
+  95 0014 6846     		mov r0, sp							// move SP into r0
+  96 0016 80F30988 		msr psp, r0							// save SP into the process stack pointer (PSP)
+  97              	
+  98              		/* The LED blinking code consumes at most 32B of stack.
+  99              		 * If there is >32B of space on the main stack, we do not switch the
+ 100              		 * stack pointer to the reserved hard fault handler stack.
+ 101              		 * This way you can connect the GDB debugger and it recognizes the stack
+ 102              		 * frames correctly, even while blinking the LED.
+ 103              		 */
+ 104 001a 0C48     		ldr r0, =__stack_start
+ 105 001c 88B0     		sub sp, #32							// subtract 32B from the stack pointer
+ 106 001e 8545     		cmp sp, r0							// compare: SP - R0 => pos. if space left
+ 107 0020 08B0     		add sp, #32							// undo the subtraction
+ 108 0022 01D5     		bpl use_main_stack					// do not switch stack, if there is enough space left
+ 109              											// otherwise change SP to hard fault handler stack
+ 110 0024 0A48     		ldr r0, =__process_stack_top		// load the PSP value into register 0
+ 111 0026 8546     		mov sp, r0							// write the current stack pointer to the new PSP value
+ 112              	
+ 113              	use_main_stack:
+ 114 0028 7046     		mov r0, lr							// restore register 0 from the LR
+ 115              	
+ 116              		/* This sets up and toggles an LED.
+ 117              		 * The actual setup and toggle code is delegated to C++ world,
+ 118              		 * so that the xpcc GPIO API can be used.
+ 119              		 * This consumes very, very little stack, definitely less than 32B.
+ 120              		 *
+ 121              		 * This code clobbers R0,R1,R2 & R3, hopefully they were saved on exception entry.
+ 122              		 * Note: We are restoring LR to enable GDB stack unwinding.
+ 123              		 */
+ 124 002a 0A48     		ldr r0, =_initHardFaultHandlerLed
+ 125 002c 8047     		blx r0 								// call Led::setOutput();
+ 126 002e 6FF00600 		ldr r0, =0xfffffff9					// ARMv6 cannot load directly into LR
+ 127 0032 8646     		mov lr, r0							// restore link register for GDB
+ 128              	loop:
+ 129 0034 0848     		ldr r0, =_ZN4xpcc5clock4fcpuE		// load xpcc::clock::fcpu
+ 130 0036 0538     	1:	subs r0, r0, #5						// subtract 5 from value
+ 131 0038 FDD5     		bpl	1b								// loop while positive
+ 132 003a 0848     		ldr r0, =_toggleHardFaultHandlerLed
+ 133 003c 8047     		blx r0								// call Led::toggle();
+ 134 003e 6FF00600 		ldr r0, =0xfffffff9					// ARMv6 cannot load directly into LR
+ 135 0042 8646     		mov lr, r0							// restore link register for GDB
+ 136 0044 F6E7     		b loop								// loop forever
+ 137              	
+ 139              		.endfunc
+ 140              	
+ 141 0046 0000F0ED 		.end...
+ 141      00E00000 
+ 141      00000000 
+ 141      00000000 
+ 141      00000000 
+DEFINED SYMBOLS
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:33     .text:0000000000000000 $t
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:46     .text:0000000000000000 HardFault_Handler
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:92     .text:0000000000000012 no_debugger
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:113    .text:0000000000000028 use_main_stack
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:128    .text:0000000000000034 loop
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:141    .text:0000000000000046 $d
+build/libxpcc/generated_platform/driver/core/cortex/hard_fault.sx:141    .text:0000000000000048 $d
+
+UNDEFINED SYMBOLS
+__stack_start
+__process_stack_top
+_initHardFaultHandlerLed
+_ZN4xpcc5clock4fcpuE
+_toggleHardFaultHandlerLed
